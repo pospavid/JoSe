@@ -24,21 +24,29 @@ headers = {
 # 1. REPARATURA: GISPORTAL.CZ (Přes skryté API)
 # ----------------------------------------------------
 try:
-    # Voláme přímo backendové API Gisportálu, které vrací inzeráty v JSON
-    api_url = "https://gisportal.cz/wp-json/wp/v2/jobs?per_page=10"
+    # Zkoušíme načíst inzeráty z custom post type 'jobs' i klasické 'posts' z rubriky, pokud by se změnila struktura
+    api_url = "https://gisportal.cz/wp-json/wp/v2/jobs?per_page=15"
     response = requests.get(api_url, verify=False, headers=headers)
     
+    # Pokud custom jobs nevrátí nic, zkusíme standardní příspěvky (může to být záložní varianta webu)
+    if response.status_code != 200 or len(response.json()) == 0:
+        api_url = "https://gisportal.cz/wp-json/wp/v2/posts?categories=pracovni-nabidky&per_page=15"
+        response = requests.get(api_url, verify=False, headers=headers)
+
     if response.status_code == 200:
         posts = response.json()
-        print(f"Gisportal API: Staženo {len(posts)} aktuálních inzerátů.")
+        print(f"Gisportal API: Nalezeno {len(posts)} příspěvků ke kontrole.")
         
         for post in posts:
             title_text = post.get('title', {}).get('rendered', '').strip()
-            # Dekódování případných HTML entit v názvu (např. &amp;)
             title_text = BeautifulSoup(title_text, 'html.parser').text
             job_url = post.get('link', '')
             
-            if any(kw in title_text.lower() for kw in KEYWORDS):
+            print(f"  Kontrola názvu: '{title_text}'") # Tento řádek nám v logu ukáže, co přesně web posílá
+            
+            # Pokud je inzerát v sekci jobs, vezmeme ho raději VŠECHNY, abychom o nic nepřišli, 
+            # případně aplikujeme filtr na klíčová slova
+            if any(kw in title_text.lower() for kw in KEYWORDS) or "wp/v2/jobs" in api_url:
                 fe = fg.add_entry()
                 fe.title(f"Gisportal: {title_text}")
                 fe.link(href=job_url)
