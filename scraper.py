@@ -1,59 +1,64 @@
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from feedgen.feed import FeedGenerator
+import urllib3
+import os
+
+# Vypnutí otravných SSL varování, pokud by weby měly špatné certifikáty
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Seznam stránek, které chceš hlídat
 URLS = {
-    "Web firmy A": "https://gisportal.cz/pracovni-nabidky",
-    "Web firmy B": "https://www.zememeric.cz/inzerce-pracovni-nabidky-prehled"
+    "Web firmy A": "https://example.com/kariera",
+    "Web firmy B": "https://another-example.com/jobs"
 }
 
-jobs_found = []
+# 1. Inicializace RSS Feed Generatoru
+fg = FeedGenerator()
+fg.title('Moje Hlídání Pracovních Nabídek')
+fg.link(href='https://github.com/tvoje-jmeno/JoSe', rel='alternate')
+fg.description('Automaticky generovaný přehled nových pozic')
+fg.language('cs')
 
+jobs_found = False
+
+# 2. Skrapování webů
 for firma, url in URLS.items():
     try:
-        # verify=False pro jistotu kvůli SSL chybám, na které narážíme
         response = requests.get(url, verify=False, headers={"User-Agent": "Mozilla/5.0"})
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # TADY SE LIŠÍ PODLE WEBU - musíš najít správné HTML tagy
-        # Např. hledáme všechny nadpisy h3, které obsahují slovo "Developer"
+        # TADY SE LIŠÍ PODLE WEBU - uprav podle konkrétní struktury stránek
         for link in soup.find_all('a'):
             text = link.text.strip()
+            
             if "developer" in text.lower() or "python" in text.lower():
-                jobs_found.append({"firma": firma, "pozice": text, "url": link.get('href')})
+                job_url = link.get('href')
+                # Ošetření relativních odkazů (pokud chybí doména)
+                if job_url and not job_url.startswith('http'):
+                    from urllib.parse import urljoin
+                    job_url = urljoin(url, job_url)
+                
+                # Přidání položky do RSS feedu
+                fe = fg.add_entry()
+                fe.title(f"{firma}: {text}")
+                fe.link(href=job_url)
+                fe.description(f"Byla nalezena nová pozice: {text} na webu {firma}.")
+                fe.guid(job_url, permalink=True) # GUID zabrání duplicitám ve čtečce
+                
+                jobs_found = True
+                
     except Exception as e:
         print(f"Chyba při stahování {firma}: {e}")
 
-# Vygenerování výsledného HTML
-html_content = f"""
-<!DOCTYPE html>
-<html lang="cs">
-<head>
-    <meta charset="UTF-8">
-    <title>Moje Pracovní Nabídky</title>
-    <style>
-        body {{ font-family: sans-serif; margin: 40px; background: #f4f4f9; }}
-        .job-card {{ background: white; padding: 15px; margin-bottom: 10px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-    </style>
-</head>
-<body>
-    <h1>Nalezené pozice (Aktualizováno: {datetime.now().strftime('%d.%m.%Y %H:%M')})</h1>
-"""
+# Pokud se nic nenašlo, vytvoříme aspoň jednu servisní zprávu, aby RSS feed nebyl prázdný (čtečky prázdné feedy nemají rády)
+if not jobs_found:
+    fe = fg.add_entry()
+    fe.title("Žádné nové pozice")
+    fe.link(href=list(URLS.values())[0])
+    fe.description("Dnes nebyly nalezeny žádné nové vyhovující nabídky.")
+    fe.guid("no-jobs-today", permalink=False)
 
-if jobs_found:
-    for job in jobs_found:
-        html_content += f"""
-        <div class="job-card">
-            <h3>{job['firma']} - {job['pozice']}</h3>
-            <a href="{job['url']}" target="_blank">Odkaz na nabídku</a>
-        </div>
-        """
-else:
-    html_content += "<p>Dnes nebyly nalezeny žádné nové vyhovující pozice.</p>"
-
-html_content += "</body></html>"
-
-# Uložení do souboru index.html
-with open("index.html", "w", encoding="utf-8") as f:
-    f.write(html_content)
+# 3. Uložení výsledku do XML
+fg.rss_file('pracovni_nabidky.xml', pretty=True)
+print("RSS feed úspěšně aktualizován.")
