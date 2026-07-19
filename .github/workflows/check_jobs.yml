@@ -1,15 +1,15 @@
-name: Denní kontrola práce
+name: Denní kontrola práce do RSS
 
 on:
   schedule:
     - cron: '0 6 * * *' # Spustí se každý den v 6:00 ráno UTC
-  workflow_dispatch: # Tlačítko pro ruční spuštění kdykoliv
+  workflow_dispatch:
 
 jobs:
   scrape_and_deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Nutné pro uložení index.html do repozitáře
+      contents: write
 
     steps:
     - name: Checkout repozitáře
@@ -22,15 +22,15 @@ jobs:
 
     - name: Instalace knihoven
       run: |
-        pip install requests beautifulsoup4
+        pip install requests beautifulsoup4 feedgen # Přidán feedgen
 
     - name: Spuštění scraperu
       run: python scraper.py
 
-    - name: Uložení změn a publikace
+    - name: Uložení změn a push do repozitáře
       run: |
         git config --global user.email "github-actions@github.com"
         git config --global user.name "github-actions"
-        git add index.html
-        git commit -m "Aktualizace nabídek: $(date +'%Y-%m-%d')" || echo "Žádné nové změny"
+        git add pracovni_nabidky.xml
+        git commit -m "Aktualizace RSS feedu: $(date +'%Y-%m-%d')" || echo "Žádné nové změny"
         git push
