@@ -2,63 +2,100 @@ import requests
 from bs4 import BeautifulSoup
 from feedgen.feed import FeedGenerator
 import urllib3
-import os
+from datetime import datetime
 
-# Vypnutí otravných SSL varování, pokud by weby měly špatné certifikáty
+# Vypnutí SSL varování
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Seznam stránek, které chceš hlídat
-URLS = {
-    "Gisportal": "https://gisportal.cz/pracovni-nabidky",
-    "Zememeric": "https://www.zememeric.cz/inzerce-pracovni-nabidky-prehled"
-}
+# Klíčová slova, která tě zajímají (vše se převádí na malá písmena, takže na velikosti nezáleží)
+KEYWORDS = ["gis", "analytik", "specialista", "vývojář", "developer", "zeměměřič", "geodet", "kartograf", "pracovník"]
 
-# 1. Inicializace RSS Feed Generatoru
+# Inicializace RSS Feed Generatoru
 fg = FeedGenerator()
-fg.title('Moje Hlídání Pracovních Nabídek')
-fg.link(href='https://github.com/tvoje-jmeno/JoSe', rel='alternate')
-fg.description('Automaticky generovaný přehled nových pozic')
+fg.title('GIS a Geodezie Pracovní Nabídky')
+fg.link(href='https://gisportal.cz/pracovni-nabidky/', rel='alternate')
+fg.description('Automaticky generovaný přehled z portálů Gisportal a Zeměměřič')
 fg.language('cs')
 
 jobs_found = False
+headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-# 2. Skrapování webů
-for firma, url in URLS.items():
-    try:
-        response = requests.get(url, verify=False, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # TADY SE LIŠÍ PODLE WEBU - uprav podle konkrétní struktury stránek
-        for link in soup.find_all('a'):
-            text = link.text.strip()
-            
-            if "developer" in text.lower() or "python" in text.lower():
-                job_url = link.get('href')
-                # Ošetření relativních odkazů (pokud chybí doména)
+# ----------------------------------------------------
+# 1. SCRAPING: GISPORTAL.CZ
+# ----------------------------------------------------
+try:
+    url_gis = "https://gisportal.cz/pracovni-nabidky/"
+    response = requests.get(url_gis, verify=False, headers=headers)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # Gisportal používá tag <article> pro každý inzerát
+    articles = soup.find_all('article')
+    
+    for article in articles:
+        # Hledáme nadpis h2 s třídou entry-title
+        title_tag = article.find('h2', class_='entry-title')
+        if title_tag:
+            link_tag = title_tag.find('a')
+            if link_tag:
+                title_text = link_tag.text.strip()
+                job_url = link_tag.get('href')
+                
+                # Kontrola klíčových slov
+                if any(kw in title_text.lower() for kw in KEYWORDS):
+                    fe = fg.add_entry()
+                    fe.title(f"Gisportal: {title_text}")
+                    fe.link(href=job_url)
+                    fe.description(f"Nová pozice na Gisportálu: {title_text}")
+                    fe.guid(job_url, permalink=True)
+                    jobs_found = True
+except Exception as e:
+    print(f"Chyba při skrapování Gisportal: {e}")
+
+
+# ----------------------------------------------------
+# 2. SCRAPING: ZEMEMERIC.CZ
+# ----------------------------------------------------
+try:
+    url_zeme = "https://www.zememeric.cz/inzerce-pracovni-nabidky-prehled/"
+    response = requests.get(url_zeme, verify=False, headers=headers)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # Zeměměřič má inzeráty v tabulce, hledáme řádky <tr>
+    # Ignorujeme první řádek (hlavičku tabulky)
+    rows = soup.find_all('tr')[1:]
+    
+    for row in rows:
+        cells = row.find_all('td')
+        # Tabulka musí mít aspoň 2 buňky (Datum a Název s odkazem)
+        if len(cells) >= 2:
+            link_tag = cells[1].find('a')
+            if link_tag:
+                title_text = link_tag.text.strip()
+                job_url = link_tag.get('href')
+                
+                # Oprava relativního odkazu, pokud chybí doména
                 if job_url and not job_url.startswith('http'):
-                    from urllib.parse import urljoin
-                    job_url = urljoin(url, job_url)
+                    job_url = "https://www.zememeric.cz" + job_url
                 
-                # Přidání položky do RSS feedu
-                fe = fg.add_entry()
-                fe.title(f"{firma}: {text}")
-                fe.link(href=job_url)
-                fe.description(f"Byla nalezena nová pozice: {text} na webu {firma}.")
-                fe.guid(job_url, permalink=True) # GUID zabrání duplicitám ve čtečce
-                
-                jobs_found = True
-                
-    except Exception as e:
-        print(f"Chyba při stahování {firma}: {e}")
+                if any(kw in title_text.lower() for kw in KEYWORDS):
+                    fe = fg.add_entry()
+                    fe.title(f"Zeměměřič: {title_text}")
+                    fe.link(href=job_url)
+                    fe.description(f"Nabídka z portálu Zeměměřič: {title_text}")
+                    fe.guid(job_url, permalink=True)
+                    jobs_found = True
+except Exception as e:
+    print(f"Chyba při skrapování Zeměměřič: {e}")
 
-# Pokud se nic nenašlo, vytvoříme aspoň jednu servisní zprávu, aby RSS feed nebyl prázdný (čtečky prázdné feedy nemají rády)
+
+# Pojistka pro prázdný feed
 if not jobs_found:
     fe = fg.add_entry()
     fe.title("Žádné nové pozice")
-    fe.link(href=list(URLS.values())[0])
-    fe.description("Dnes nebyly nalezeny žádné nové vyhovující nabídky.")
+    fe.link(href="https://gisportal.cz/pracovni-nabidky/")
+    fe.description(f"Při kontrole {datetime.now().strftime('%d.%m.%Y')} nebyly nalezeny žádné nové inzeráty odpovídající klíčovým slovům.")
     fe.guid("no-jobs-today", permalink=False)
 
-# 3. Uložení výsledku do XML
+# Uložení do XML
 fg.rss_file('pracovni_nabidky.xml', pretty=True)
-print("RSS feed úspěšně aktualizován.")
+print("RSS feed byl úspěšně vygenerován.")
