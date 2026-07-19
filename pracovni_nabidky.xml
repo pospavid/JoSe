@@ -1,17 +1,17 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0">
   <channel>
-    <title>Moje Hlídání Pracovních Nabídek</title>
-    <link>https://github.com/tvoje-jmeno/JoSe</link>
-    <description>Automaticky generovaný přehled nových pozic</description>
+    <title>GIS a Geodezie Pracovní Nabídky</title>
+    <link>https://gisportal.cz/pracovni-nabidky/</link>
+    <description>Automaticky generovaný přehled z portálů Gisportal a Zeměměřič</description>
     <docs>http://www.rssboard.org/rss-specification</docs>
     <generator>python-feedgen</generator>
     <language>cs</language>
-    <lastBuildDate>Sun, 19 Jul 2026 12:06:57 +0000</lastBuildDate>
+    <lastBuildDate>Sun, 19 Jul 2026 12:15:14 +0000</lastBuildDate>
     <item>
       <title>Žádné nové pozice</title>
-      <link>https://gisportal.cz/pracovni-nabidky</link>
-      <description>Dnes nebyly nalezeny žádné nové vyhovující nabídky.</description>
+      <link>https://gisportal.cz/pracovni-nabidky/</link>
+      <description>Při kontrole 19.07.2026 nebyly nalezeny žádné nové inzeráty odpovídající klíčovým slovům.</description>
       <guid isPermaLink="false">no-jobs-today</guid>
     </item>
   </channel>
