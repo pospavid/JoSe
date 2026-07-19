@@ -9,8 +9,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Seznam stránek, které chceš hlídat
 URLS = {
-    "Web firmy A": "https://example.com/kariera",
-    "Web firmy B": "https://another-example.com/jobs"
+    "Web firmy A": "https://gisportal.cz/pracovni-nabidky",
+    "Web firmy B": "https://www.zememeric.cz/inzerce-pracovni-nabidky-prehled"
 }
 
 # 1. Inicializace RSS Feed Generatoru
