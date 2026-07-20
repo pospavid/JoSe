@@ -90,8 +90,10 @@ from datetime import timedelta
 
 from datetime import timedelta
 
+import time
+
 # ----------------------------------------------------
-# 3. LINKEDIN (Přes Apify API - max 60s, 14 dní)
+# 3. LINKEDIN (Přes Apify API - garance načtení dat)
 # ----------------------------------------------------
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN")
 
@@ -99,7 +101,6 @@ if APIFY_TOKEN:
     try:
         client = ApifyClient(APIFY_TOKEN)
 
-        # Vyhledávání GIS v ČR za posledních 14 dní (r1209600)
         search_url = "https://www.linkedin.com/jobs/search/?keywords=GIS&location=Czechia&f_TPR=r1209600"
 
         run_input = {
@@ -108,36 +109,40 @@ if APIFY_TOKEN:
             "limit": 15
         }
 
-        print("Spouštím Apify scraper pro LinkedIn (max 60s)...")
+        print("Spouštím Apify scraper pro LinkedIn...")
         
-        # Max limit 60 sekund – po minutě se běh v Apify automaticky ukončí
-        run = client.actor("curious_coder/linkedin-jobs-scraper").call(
-            run_input=run_input,
-            memory_mbytes=1024,
-            run_timeout=timedelta(seconds=60)
-        )
+        # 1. Pouze spustíme actor (nečekáme na výjimku z call)
+        run = client.actor("curious_coder/linkedin-jobs-scraper").start(run_input=run_input)
+        run_id = run["id"]
+        dataset_id = run["defaultDatasetId"]
+        
+        # 2. Počkáme 25 sekund, než actor v pohodě stáhne první výsledky
+        print("Čekám 25 sekund na stažení prvních inzerátů...")
+        time.sleep(25)
 
-        if run and "defaultDatasetId" in run:
-            dataset_items = client.dataset(run["defaultDatasetId"]).list_items().items
-            print(f"LinkedIn (Apify): Získáno {len(dataset_items)} inzerátů z datasetu.")
+        # 3. Načteme data Z DATASETU bez ohledu na to, zda actor ještě běží nebo vypršel
+        dataset_items = client.dataset(dataset_id).list_items().items
+        print(f"LinkedIn (Apify): Získáno {len(dataset_items)} inzerátů z datasetu.")
 
-            for item in dataset_items:
-                title_text = item.get("title") or item.get("jobTitle") or item.get("position") or ""
-                company = item.get("companyName") or item.get("company") or "LinkedIn"
-                job_url = item.get("link") or item.get("url") or item.get("jobUrl") or ""
-                
-                if title_text and job_url:
-                    fe = fg.add_entry()
-                    fe.title(f"LinkedIn: {title_text} ({company})")
-                    fe.link(href=job_url)
-                    fe.description(f"Pracovní pozice na LinkedInu: {title_text} ve firmě {company}")
-                    fe.guid(job_url, permalink=True)
-                    jobs_found = True
-                    print(f"  -> Přidáno do RSS: {title_text}")
-                else:
-                    print(f"  -> Přeskočena neúplná položka: {item}")
-        else:
-            print("Apify běh vypršel nebo nevrátil výsledky.")
+        for item in dataset_items:
+            title_text = item.get("title") or item.get("jobTitle") or item.get("position") or ""
+            company = item.get("companyName") or item.get("company") or "LinkedIn"
+            job_url = item.get("link") or item.get("url") or item.get("jobUrl") or ""
+            
+            if title_text and job_url:
+                fe = fg.add_entry()
+                fe.title(f"LinkedIn: {title_text} ({company})")
+                fe.link(href=job_url)
+                fe.description(f"Pracovní pozice na LinkedInu: {title_text} ve firmě {company}")
+                fe.guid(job_url, permalink=True)
+                jobs_found = True
+                print(f"  -> Přidáno do RSS: {title_text}")
+
+        # 4. Volitelně ukončíme běh v Apify, abychom neplýtvali zbylé sekundy
+        try:
+            client.run(run_id).abort()
+        except Exception:
+            pass
 
     except Exception as e:
         print(f"Chyba při skrapování LinkedIn přes Apify: {e}")
