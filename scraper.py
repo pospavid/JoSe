@@ -154,6 +154,64 @@ if APIFY_TOKEN:
 else:
     print("Apify token nebyl nalezen v proměnných prostředí (APIFY_TOKEN).")
 
+import requests
+from bs4 import BeautifulSoup
+
+# ----------------------------------------------------
+# 4. JOBS.CZ (Přímé skrapování přes requests)
+# ----------------------------------------------------
+print("Spouštím skrapování Jobs.cz...")
+
+jobs_url = "https://www.jobs.cz/prace/praha/?q%5B%5D=gis&locality%5Bradius%5D=0"
+
+# Hlavička, aby web neblokoval požadavek jako bota
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
+try:
+    response = requests.get(jobs_url, headers=headers, timeout=10)
+    
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Inzeráty na Jobs.cz jsou v kartách/článcích (SearchResultCard nebo <article>)
+        # Hledáme všechny odkazy na detail nabídky (/rpd/ nebo /nabidka/)
+        job_articles = soup.select("article") or soup.select(".SearchResultCard")
+        
+        print(f"Jobs.cz: Nalezeno {len(job_articles)} možných inzerátů.")
+
+        for article in job_articles:
+            # Nadpis a odkaz bývají uvnitř tagu <a> nebo <h2>/<h3>
+            link_tag = article.select_one("a[href*='/rpd/']") or article.select_one("a[href*='/nabidka/']") or article.select_one("h2 a") or article.select_one("h3 a")
+            
+            if link_tag:
+                title_text = link_tag.get_text(strip=True)
+                job_link = link_tag.get("href", "")
+                
+                # Pokud je odkaz relativní, převedeme na absolutní URL
+                if job_link.startswith("/"):
+                    job_link = f"https://www.jobs.cz{job_link}"
+
+                # Název firmy (pokud je na kartě uvedena)
+                company_tag = article.select_one(".SearchResultCard__footer") or article.select_one("[class*='company']")
+                company = company_tag.get_text(strip=True) if company_tag else "Jobs.cz"
+
+                if title_text and job_link:
+                    fe = fg.add_entry()
+                    fe.title(f"Jobs.cz: {title_text} ({company})")
+                    fe.link(href=job_link)
+                    fe.description(f"Pracovní pozice na Jobs.cz: {title_text} - Firma: {company}")
+                    fe.guid(job_link, permalink=True)
+                    jobs_found = True
+                    print(f"  -> Přidáno do RSS: {title_text}")
+
+    else:
+        print(f"Jobs.cz vrátil stavový kód: {response.status_code}")
+
+except Exception as e:
+        print(f"Chyba při skrapování Jobs.cz: {e}")
+
 
 # Pojistka pro prázdný feed
 if not jobs_found:
