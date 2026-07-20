@@ -96,10 +96,9 @@ if APIFY_TOKEN:
 
         # Konfigurace vstupu pro Apify LinkedIn Jobs Scraper
         run_input = {
-            "title": "GIS",             # Nebo "Geodet"
-            "location": "Czechia",      # Místo výkonu práce
-            "publishedAt": "r86400",     # Inzeráty za posledních 24 hodin (86400 sekund)
-            "maxItems": 10              # Limit položek pro úsporu kreditu
+            "title": "gis",             # Nebo "Geodet"
+            "location": "Prague",      # Místo výkonu práce
+            "maxItems": 20              # Limit položek pro úsporu kreditu
         }
 
         # Spuštění Actoru na Apify a čekání na výsledky
