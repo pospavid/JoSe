@@ -6,6 +6,7 @@ from datetime import datetime
 import os
 from apify_client import ApifyClient
 from datetime import timedelta
+import time
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -93,7 +94,7 @@ from datetime import timedelta
 import time
 
 # ----------------------------------------------------
-# 3. LINKEDIN (Přes Apify API - garance načtení dat)
+# 3. LINKEDIN (Přes Apify API - opravené atributy Run)
 # ----------------------------------------------------
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN")
 
@@ -111,16 +112,18 @@ if APIFY_TOKEN:
 
         print("Spouštím Apify scraper pro LinkedIn...")
         
-        # 1. Pouze spustíme actor (nečekáme na výjimku z call)
+        # 1. Spustíme actor přes .start()
         run = client.actor("curious_coder/linkedin-jobs-scraper").start(run_input=run_input)
-        run_id = run["id"]
-        dataset_id = run["defaultDatasetId"]
         
-        # 2. Počkáme 25 sekund, než actor v pohodě stáhne první výsledky
+        # ✅ Správný přístup k atributům objektu Run (namísto dict slovníku)
+        run_id = run.id
+        dataset_id = run.default_dataset_id
+        
+        # 2. Počkáme 25 sekund na stažení prvních inzerátů
         print("Čekám 25 sekund na stažení prvních inzerátů...")
         time.sleep(25)
 
-        # 3. Načteme data Z DATASETU bez ohledu na to, zda actor ještě běží nebo vypršel
+        # 3. Načteme položky přímo z datasetu
         dataset_items = client.dataset(dataset_id).list_items().items
         print(f"LinkedIn (Apify): Získáno {len(dataset_items)} inzerátů z datasetu.")
 
@@ -137,8 +140,10 @@ if APIFY_TOKEN:
                 fe.guid(job_url, permalink=True)
                 jobs_found = True
                 print(f"  -> Přidáno do RSS: {title_text}")
+            else:
+                print(f"  -> Přeskočena neúplná položka: {item}")
 
-        # 4. Volitelně ukončíme běh v Apify, abychom neplýtvali zbylé sekundy
+        # 4. Zastavíme actor na Apify, ať neplýtvá minuty
         try:
             client.run(run_id).abort()
         except Exception:
