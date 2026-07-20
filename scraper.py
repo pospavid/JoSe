@@ -5,6 +5,7 @@ import urllib3
 from datetime import datetime
 import os
 from apify_client import ApifyClient
+from datetime import timedelta
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -86,7 +87,7 @@ except Exception as e:
     print(f"Chyba při čtení sitemapy Zeměměřič: {e}")
 
 # ----------------------------------------------------
-# 3. LINKEDIN (Přes Apify API - optimalizováno dle Apify AI)
+# 3. LINKEDIN (Přes Apify API - opravený run_timeout)
 # ----------------------------------------------------
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN")
 
@@ -106,11 +107,11 @@ if APIFY_TOKEN:
 
         print("Spouštím Apify scraper pro LinkedIn...")
         
-        # timeout_secs nastavuje maximální dobu běhu v sekundách
+        # run_timeout přijímá objekt timedelta z modulu datetime
         run = client.actor("curious_coder/linkedin-jobs-scraper").call(
             run_input=run_input,
             memory_mbytes=1024,
-            timeout_secs=120
+            run_timeout=timedelta(seconds=120)  # Max. doba běhu 2 minuty
         )
 
         if run and "defaultDatasetId" in run:
