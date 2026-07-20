@@ -3,6 +3,8 @@ from bs4 import BeautifulSoup
 from feedgen.feed import FeedGenerator
 import urllib3
 from datetime import datetime
+import os
+from apify_client import ApifyClient
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -82,6 +84,49 @@ try:
                     jobs_found = True
 except Exception as e:
     print(f"Chyba při čtení sitemapy Zeměměřič: {e}")
+
+# ----------------------------------------------------
+# 3. LINKEDIN (Přes Apify API)
+# ----------------------------------------------------
+APIFY_TOKEN = os.environ.get("APIFY_TOKEN")
+
+if APIFY_TOKEN:
+    try:
+        client = ApifyClient(APIFY_TOKEN)
+
+        # Konfigurace vstupu pro Apify LinkedIn Jobs Scraper
+        run_input = {
+            "title": "GIS",             # Nebo "Geodet"
+            "location": "Czechia",      # Místo výkonu práce
+            "publishedAt": "r86400",     # Inzeráty za posledních 24 hodin (86400 sekund)
+            "maxItems": 10              # Limit položek pro úsporu kreditu
+        }
+
+        # Spuštění Actoru na Apify a čekání na výsledky
+        # (Používáme oblíbený veřejný actor 'curious_coder/linkedin-jobs-scraper')
+        run = client.actor("curious_coder/linkedin-jobs-scraper").call(run_input=run_input)
+
+        # Načtení nalezených inzerátů z Datasetu
+        dataset_items = client.dataset(run["defaultDatasetId"]).list_items().items
+        print(f"LinkedIn (Apify): Nalezeno {len(dataset_items)} inzerátů.")
+
+        for item in dataset_items:
+            title_text = item.get("title", "")
+            company = item.get("companyName", "")
+            job_url = item.get("link", "")
+            
+            if title_text and job_url:
+                fe = fg.add_entry()
+                fe.title(f"LinkedIn: {title_text} ({company})")
+                fe.link(href=job_url)
+                fe.description(f"Pracovní pozice na LinkedInu: {title_text} v firmě {company}")
+                fe.guid(job_url, permalink=True)
+                jobs_found = True
+
+    except Exception as e:
+        print(f"Chyba při skrapování LinkedIn přes Apify: {e}")
+else:
+    print("Apify token nebyl nalezen v proměnných prostředí (APIFY_TOKEN).")
 
 
 # Pojistka pro prázdný feed
