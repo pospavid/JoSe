@@ -86,7 +86,7 @@ except Exception as e:
     print(f"Chyba při čtení sitemapy Zeměměřič: {e}")
 
 # ----------------------------------------------------
-# 3. LINKEDIN (Přes Apify API s opraveným vstupem)
+# 3. LINKEDIN (Přes Apify API - rychlé a bez sekání)
 # ----------------------------------------------------
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN")
 
@@ -94,29 +94,35 @@ if APIFY_TOKEN:
     try:
         client = ApifyClient(APIFY_TOKEN)
 
-        # Přímý odkaz na vyhledávání pozic GIS v ČR za poslední týden z LinkedInu
+        # Hledáme GIS v ČR za poslední týden (r604800)
         search_url = "https://www.linkedin.com/jobs/search/?keywords=GIS&location=Czechia&f_TPR=r604800"
 
         run_input = {
-            "urls": [search_url],  # Actor vyžaduje seznam URL adres
-            "deepScrape": False,   # Rychlejší a levnější skrapování (stáhne základní přehled)
-            "limit": 10            # Počet zjišťovaných inzerátů
+            "urls": [search_url],
+            "deepScrape": False, # Stáhne jen přehled (rychlé)
+            "limit": 15          # Maximálně 15 inzerátů (zabrání zacyklení)
         }
 
-        # Spuštění Actoru na Apify
-        run = client.actor("curious_coder/linkedin-jobs-scraper").call(run_input=run_input)
+        print("Spouštím Apify scraper pro LinkedIn...")
+        
+        # timeout_secs=120 zajistí, že se skript nezasekne déle než na 2 minuty
+        run = client.actor("curious_coder/linkedin-jobs-scraper").call(
+            run_input=run_input, 
+            timeout_secs=120
+        )
 
-        # Načtení výsledků
+        # Načtení výsledků z Apify
         dataset_items = client.dataset(run["defaultDatasetId"]).list_items().items
         print(f"LinkedIn (Apify): Nalezeno {len(dataset_items)} inzerátů.")
 
         for item in dataset_items:
-            # Actor vrací název buď jako 'title' nebo 'jobTitle'
+            # Získání údajů z JSONu od Apify
             title_text = item.get("title") or item.get("jobTitle") or ""
             company = item.get("companyName") or item.get("company") or ""
             job_url = item.get("link") or item.get("url") or ""
             
             if title_text and job_url:
+                # Přidání inzerátu přímo do tvého společného RSS feedu
                 fe = fg.add_entry()
                 fe.title(f"LinkedIn: {title_text} ({company})")
                 fe.link(href=job_url)
