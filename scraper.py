@@ -6,7 +6,8 @@ from datetime import datetime
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-KEYWORDS = ["gis", "analytik", "specialista", "vývojář", "developer", "zeměměřič", "geodet", "kartograf", "pracovník", "inženýr", "technik"]
+# Klíčová slova pro Zeměměřiče
+KEYWORDS = ["gis", "analytik", "specialista", "vývojář", "developer", "zeměměřič", "geodet", "kartograf", "pracovník", "inženýr", "technik", "práce", "nabídka", "pozice"]
 
 fg = FeedGenerator()
 fg.title('GIS a Geodezie Pracovní Nabídky')
@@ -16,73 +17,59 @@ fg.language('cs')
 
 jobs_found = False
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/html, application/xml"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
 # ----------------------------------------------------
-# 1. REPARATURA: GISPORTAL.CZ (Přes skryté API)
+# 1. GISPORTAL.CZ (Přímé HTML čtení nadpisů h3)
 # ----------------------------------------------------
 try:
-    # Zkoušíme načíst inzeráty z custom post type 'jobs' i klasické 'posts' z rubriky, pokud by se změnila struktura
-    api_url = "https://gisportal.cz/wp-json/wp/v2/jobs?per_page=15"
-    response = requests.get(api_url, verify=False, headers=headers)
+    url = "https://gisportal.cz/pracovni-nabidky/"
+    response = requests.get(url, headers=headers, verify=False)
     
-    # Pokud custom jobs nevrátí nic, zkusíme standardní příspěvky (může to být záložní varianta webu)
-    if response.status_code != 200 or len(response.json()) == 0:
-        api_url = "https://gisportal.cz/wp-json/wp/v2/posts?categories=pracovni-nabidky&per_page=15"
-        response = requests.get(api_url, verify=False, headers=headers)
-
     if response.status_code == 200:
-        posts = response.json()
-        print(f"Gisportal API: Nalezeno {len(posts)} příspěvků ke kontrole.")
+        soup = BeautifulSoup(response.text, 'html.parser')
+        # Najdeme všechny h3 nadpisy na stránce
+        h3_tags = soup.find_all('h3')
+        print(f"Gisportal: Nalezeno {len(h3_tags)} nadpisů h3.")
         
-        for post in posts:
-            title_text = post.get('title', {}).get('rendered', '').strip()
-            title_text = BeautifulSoup(title_text, 'html.parser').text
-            job_url = post.get('link', '')
+        for h3 in h3_tags:
+            # Hledáme odkaz přímo uvnitř h3 nebo v jeho okolí
+            a_tag = h3.find('a') or h3.find_parent('a')
             
-            print(f"  Kontrola názvu: '{title_text}'") # Tento řádek nám v logu ukáže, co přesně web posílá
-            
-            # Pokud je inzerát v sekci jobs, vezmeme ho raději VŠECHNY, abychom o nic nepřišli, 
-            # případně aplikujeme filtr na klíčová slova
-            if any(kw in title_text.lower() for kw in KEYWORDS) or "wp/v2/jobs" in api_url:
-                fe = fg.add_entry()
-                fe.title(f"Gisportal: {title_text}")
-                fe.link(href=job_url)
-                fe.description(f"Nová pozice na Gisportálu: {title_text}")
-                fe.guid(job_url, permalink=True)
-                jobs_found = True
+            if a_tag and a_tag.get('href'):
+                title_text = h3.get_text(strip=True)
+                job_url = a_tag['href']
+                
+                # Ignorujeme prázdné nebo systémové nadpisy
+                if title_text:
+                    fe = fg.add_entry()
+                    fe.title(f"Gisportal: {title_text}")
+                    fe.link(href=job_url)
+                    fe.description(f"Pracovní nabídka z Gisportálu: {title_text}")
+                    fe.guid(job_url, permalink=True)
+                    jobs_found = True
     else:
-        print(f"Gisportal API selhalo s kódem: {response.status_code}")
+        print(f"Gisportal selhal s kódem: {response.status_code}")
 except Exception as e:
-    print(f"Chyba při API skrapování Gisportal: {e}")
+    print(f"Chyba při skrapování Gisportal: {e}")
 
 
 # ----------------------------------------------------
-# 2. REPARATURA: ZEMEMERIC.CZ (Přes XML Sitemapu)
+# 2. ZEMEMERIC.CZ (Ověřená sitemap)
 # ----------------------------------------------------
 try:
-    # Obcházíme blokaci tabulky tím, že načteme XML mapu inzerátů
     sitemap_url = "https://www.zememeric.cz/inzerce-sitemap.xml"
-    response = requests.get(sitemap_url, verify=False, headers=headers)
+    response = requests.get(sitemap_url, headers=headers, verify=False)
     
     if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'xml')
-        # Sitemapa obsahuje tagy <url>, uvnitř kterých je <loc> (odkaz)
-        urls = soup.find_all('url')
-        print(f"Zeměměřič Sitemap: Nalezeno {len(urls)} odkazů v mapě.")
+        soup_xml = BeautifulSoup(response.text, 'xml')
+        urls = soup_xml.find_all('url')
         
-        # Projdeme nejnovější inzeráty (sitemapa je většinou řazená od nejnovějších)
-        # Omezíme na prvních 20, ať neprocházíme historii
         for url_tag in urls[:20]:
             loc_tag = url_tag.find('loc')
             if loc_tag:
                 job_url = loc_tag.text.strip()
-                
-                # U sitemapy nemáme název, ale vytáhneme ho čistě z URL adresy,
-                # kde je název pozice v čitelném tvaru (tzv. slug)
-                # Příklad: .../inzerce-detail/geodet-brno -> geodet brno
                 slug = job_url.split('/')[-2] if job_url.endswith('/') else job_url.split('/')[-1]
                 title_text = slug.replace('-', ' ').capitalize()
                 
@@ -90,11 +77,9 @@ try:
                     fe = fg.add_entry()
                     fe.title(f"Zeměměřič: {title_text}")
                     fe.link(href=job_url)
-                    fe.description(f"Nabídka z portálu Zeměměřič (odkaz: {slug})")
+                    fe.description(f"Nabídka z portálu Zeměměřič: {title_text}")
                     fe.guid(job_url, permalink=True)
                     jobs_found = True
-    else:
-        print(f"Zeměměřič Sitemap selhala s kódem: {response.status_code}")
 except Exception as e:
     print(f"Chyba při čtení sitemapy Zeměměřič: {e}")
 
