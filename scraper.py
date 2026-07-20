@@ -86,7 +86,7 @@ except Exception as e:
     print(f"Chyba při čtení sitemapy Zeměměřič: {e}")
 
 # ----------------------------------------------------
-# 3. LINKEDIN (Přes Apify API)
+# 3. LINKEDIN (Přes Apify API s opraveným vstupem)
 # ----------------------------------------------------
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN")
 
@@ -94,31 +94,33 @@ if APIFY_TOKEN:
     try:
         client = ApifyClient(APIFY_TOKEN)
 
-        # Konfigurace vstupu pro Apify LinkedIn Jobs Scraper
+        # Přímý odkaz na vyhledávání pozic GIS v ČR za poslední týden z LinkedInu
+        search_url = "https://www.linkedin.com/jobs/search/?keywords=GIS&location=Czechia&f_TPR=r604800"
+
         run_input = {
-            "title": "gis",             # Nebo "Geodet"
-            "location": "Prague",      # Místo výkonu práce
-            "maxItems": 20              # Limit položek pro úsporu kreditu
+            "urls": [search_url],  # Actor vyžaduje seznam URL adres
+            "deepScrape": False,   # Rychlejší a levnější skrapování (stáhne základní přehled)
+            "limit": 10            # Počet zjišťovaných inzerátů
         }
 
-        # Spuštění Actoru na Apify a čekání na výsledky
-        # (Používáme oblíbený veřejný actor 'curious_coder/linkedin-jobs-scraper')
+        # Spuštění Actoru na Apify
         run = client.actor("curious_coder/linkedin-jobs-scraper").call(run_input=run_input)
 
-        # Načtení nalezených inzerátů z Datasetu
+        # Načtení výsledků
         dataset_items = client.dataset(run["defaultDatasetId"]).list_items().items
         print(f"LinkedIn (Apify): Nalezeno {len(dataset_items)} inzerátů.")
 
         for item in dataset_items:
-            title_text = item.get("title", "")
-            company = item.get("companyName", "")
-            job_url = item.get("link", "")
+            # Actor vrací název buď jako 'title' nebo 'jobTitle'
+            title_text = item.get("title") or item.get("jobTitle") or ""
+            company = item.get("companyName") or item.get("company") or ""
+            job_url = item.get("link") or item.get("url") or ""
             
             if title_text and job_url:
                 fe = fg.add_entry()
                 fe.title(f"LinkedIn: {title_text} ({company})")
                 fe.link(href=job_url)
-                fe.description(f"Pracovní pozice na LinkedInu: {title_text} v firmě {company}")
+                fe.description(f"Pracovní pozice na LinkedInu: {title_text} ve firmě {company}")
                 fe.guid(job_url, permalink=True)
                 jobs_found = True
 
