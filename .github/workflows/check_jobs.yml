@@ -24,6 +24,12 @@ jobs:
       run: |
         pip install requests beautifulsoup4 feedgen # Přidán feedgen
 
+    - name: Run Python Scraper
+      env:
+        APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+      run: |
+        python scraper.py
+
     - name: Spuštění scraperu
       run: python scraper.py
 
