@@ -1,0 +1,6 @@
+requests
+beautifulsoup4
+feedgen
+urllib3
+lxml
+apify-client
