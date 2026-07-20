@@ -22,16 +22,13 @@ jobs:
 
     - name: Instalace knihoven
       run: |
-        pip install requests beautifulsoup4 feedgen # Přidán feedgen
+        pip install requests beautifulsoup4 feedgen urllib3 apify-client
 
     - name: Run Python Scraper
       env:
         APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
       run: |
         python scraper.py
-
-    - name: Spuštění scraperu
-      run: python scraper.py
 
     - name: Uložení změn a push do repozitáře
       run: |
