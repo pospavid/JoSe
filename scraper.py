@@ -30,13 +30,20 @@ if os.path.exists(RSS_FILE):
             link = item.findtext("link") or ""
             description = item.findtext("description") or ""
             guid = item.findtext("guid") or link
+            pub_date = item.findtext("pubDate")
 
             if guid and guid not in seen_guids:
                 fe = fg.add_entry()
                 fe.title(title)
                 fe.link(href=link)
                 fe.description(description)
-                fe.guid(guid, permalink=True)
+                
+                # OPRAVA: V knihovně feedgen je parametr 'isPermalink', nikoliv 'permalink'
+                fe.guid(guid, isPermalink=True)
+                
+                if pub_date:
+                    fe.pubDate(pub_date)
+                    
                 seen_guids.add(guid)
                 
         print(f"Načteno {len(seen_guids)} existujících nabídek z '{RSS_FILE}'.")
@@ -79,7 +86,9 @@ if APIFY_TOKEN:
                     fe.title(f"LinkedIn: {title_text} ({company})")
                     fe.link(href=job_url)
                     fe.description(f"Pozice z LinkedInu: {title_text} - Firma: {company}")
-                    fe.guid(job_url, permalink=True)
+                    
+                    # OPRAVA: Správný názvy argumentu isPermalink=True
+                    fe.guid(job_url, isPermalink=True)
                     
                     seen_guids.add(job_url)
                     new_count += 1
@@ -124,7 +133,9 @@ try:
                         fe.title(f"Jobs.cz: {title_text} ({company})")
                         fe.link(href=job_link)
                         fe.description(f"Pozice z Jobs.cz: {title_text} - Firma: {company}")
-                        fe.guid(job_link, permalink=True)
+                        
+                        # OPRAVA: Správný názvy argumentu isPermalink=True
+                        fe.guid(job_link, isPermalink=True)
 
                         seen_guids.add(job_link)
                         new_count += 1
@@ -156,7 +167,9 @@ try:
                     fe.title(f"Zeměměřič: {title_text}")
                     fe.link(href=job_link)
                     fe.description(f"Nabídka z burzy práce Zeměměřič: {title_text}")
-                    fe.guid(job_link, permalink=True)
+                    
+                    # OPRAVA: Správný názvy argumentu isPermalink=True
+                    fe.guid(job_link, isPermalink=True)
 
                     seen_guids.add(job_link)
                     new_count += 1
@@ -188,7 +201,9 @@ try:
                     fe.title(f"GISportál: {title_text}")
                     fe.link(href=job_link)
                     fe.description(f"Článek/Nabídka z GISportálu: {title_text}")
-                    fe.guid(job_link, permalink=True)
+                    
+                    # OPRAVA: Správný názvy argumentu isPermalink=True
+                    fe.guid(job_link, isPermalink=True)
 
                     seen_guids.add(job_link)
                     new_count += 1
@@ -202,5 +217,6 @@ except Exception as e:
 # ----------------------------------------------------
 # 6. ULOŽENÍ AKTUALIZOVANÉHO XML SOUBORU
 # ----------------------------------------------------
-fg.rss_file(RSS_FILE)
+# Přidáno pretty=True pro čitelnější strukturu XML souboru
+fg.rss_file(RSS_FILE, pretty=True)
 print(f"\nHotovo. Přidáno {new_count} nových nabídek. Soubor '{RSS_FILE}' nyní obsahuje celkem {len(seen_guids)} položek.")
