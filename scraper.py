@@ -1,5 +1,6 @@
 import os
 import time
+import re
 import requests
 from bs4 import BeautifulSoup
 from feedgen.feed import FeedGenerator
@@ -25,11 +26,40 @@ KEYWORDS = ["gis", "analytik", "specialista", "vývojář", "developer", "zeměm
 
 
 def strip_query(url: str) -> str:
-    """Odstraní query string a fragment z URL, aby GUID zůstalo stabilní
-    napříč jednotlivými spuštěními (např. jobs.cz přidává do URL pokaždé
-    jiné ?searchId=..., což by jinak rozbilo deduplikaci)."""
+    """Odstraní query string a fragment z URL."""
     parts = urlsplit(url)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+def stable_guid(source: str, url: str, id_pattern: str = None) -> str:
+    """Vytvoří GUID, který zůstane STEJNÝ napříč běhy, i když se povrchová
+    podoba URL trochu liší (chybějící/přebývající lomítko na konci, jiné
+    tracking parametry, jiná velikost písmen v hostname apod.).
+
+    Proč je to potřeba: samotné ořezání query stringu (strip_query) na
+    to nestačí - např. jobs.cz stránka umí vrátit odkaz jednou s
+    koncovým lomítkem a jindy bez něj, a LinkedIn URL obsahuje kromě ID
+    i popisný slug (název pozice/firmy), který se může mezi jednotlivými
+    scrapy nabídky mírně lišit i beze změny samotné nabídky. Když se
+    guid o chlup liší, deduplikace ho vyhodnotí jako "novou" nabídku a
+    v RSS se objeví zdánlivá duplicita.
+
+    Řešení: pokud je zadán `id_pattern` (regulární výraz s jednou
+    skupinou), vytáhneme z URL jen ten neměnný identifikátor (typicky
+    číselné ID nabídky) a GUID postavíme na něm - to je stabilní bez
+    ohledu na zbytek URL. Když se ID najít nepodaří, spadneme zpět na
+    normalizovanou (ořezanou, s jednotným koncovým lomítkem) URL.
+    """
+    clean = strip_query(url)
+    if id_pattern:
+        match = re.search(id_pattern, clean)
+        if match:
+            return f"{source}:{match.group(1).lower()}"
+
+    parts = urlsplit(clean)
+    normalized_path = parts.path.rstrip("/")
+    normalized = urlunsplit((parts.scheme.lower(), parts.netloc.lower(), normalized_path, "", ""))
+    return f"{source}:{normalized}"
 
 
 # ----------------------------------------------------
@@ -67,8 +97,11 @@ if os.path.exists(RSS_FILE):
                     fe.title(title)
                     fe.link(href=link)
                     fe.description(description)
-                    # BUG FIX: feedgen's guid() takes `permalink`, not `isPermalink`
-                    fe.guid(guid_clean, permalink=True)
+                    # BUG FIX: feedgen's guid() takes `permalink`, not `isPermalink`.
+                    # Starší soubory (před touto opravou) měly guid = celá URL,
+                    # nové guidy mají tvar "zdroj:id" a nejsou to platné odkazy -
+                    # proto se permalink nastavuje podle skutečné podoby guidu.
+                    fe.guid(guid_clean, permalink=guid_clean.startswith("http"))
 
                     if pub_date:
                         try:
@@ -134,18 +167,25 @@ if APIFY_TOKEN:
 
             if title_text and job_url:
                 job_url = strip_query(job_url)
-                if job_url not in seen_guids:
+                # BUG FIX: LinkedIn URL obsahuje kromě čísla nabídky i
+                # popisný slug (pozice-firma-...), který se běh od běhu
+                # může nepatrně lišit, i když jde o tutéž nabídku - to
+                # dřív vytvářelo v RSS zdánlivé duplicity. GUID proto
+                # stavíme jen na neměnném číselném ID na konci URL.
+                guid = stable_guid("linkedin", job_url, id_pattern=r"(\d{6,})/?$")
+
+                if guid not in seen_guids:
                     fe = fg.add_entry()
                     fe.title(f"LinkedIn: {title_text} ({company})")
                     fe.link(href=job_url)
                     fe.description(f"Pozice z LinkedInu: {title_text} - Firma: {company}")
                     # BUG FIX: permalink= instead of isPermalink=
-                    fe.guid(job_url, permalink=True)
+                    fe.guid(guid, permalink=False)
                     fe.pubDate(datetime.now(timezone.utc))
 
-                    seen_guids.add(job_url)
+                    seen_guids.add(guid)
                     new_count += 1
-                    print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_url})")
+                    print(f"  + [PŘIDÁNO] {title_text} (GUID: {guid})")
                 else:
                     print(f"  - [SKOČENO - DUPLICITA] {title_text}")
 
@@ -187,12 +227,16 @@ try:
             # takže bychom bez očištění nikdy nenašli duplicitu a stejná
             # nabídka by se přidávala znovu a znovu při každém běhu.
             job_link = strip_query(job_link)
+            # BUG FIX: kromě query stringu se u jobs.cz mezi jednotlivými
+            # scrapy uměla lišit i přítomnost koncového lomítka za ID -
+            # GUID proto stavíme jen na číselném ID z /rpd/<id>/.
+            guid = stable_guid("jobscz", job_link, id_pattern=r"/rpd/(\d+)")
 
-            if not title_text or not job_link or job_link in seen_on_page:
+            if not title_text or not job_link or guid in seen_on_page:
                 continue
-            seen_on_page.add(job_link)
+            seen_on_page.add(guid)
 
-            if job_link not in seen_guids:
+            if guid not in seen_guids:
                 # Firmu se pokusíme dohledat v okolí nadpisu; pokud se
                 # nepovede, nekrachujeme, jen necháme obecný popisek.
                 company = "Jobs.cz"
@@ -212,12 +256,12 @@ try:
                 fe.link(href=job_link)
                 fe.description(f"Pozice z Jobs.cz: {title_text} - Firma: {company}")
                 # BUG FIX: permalink= instead of isPermalink=
-                fe.guid(job_link, permalink=True)
+                fe.guid(guid, permalink=False)
                 fe.pubDate(datetime.now(timezone.utc))
 
-                seen_guids.add(job_link)
+                seen_guids.add(guid)
                 new_count += 1
-                print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_link})")
+                print(f"  + [PŘIDÁNO] {title_text} (GUID: {guid})")
             else:
                 print(f"  - [SKOČENO - DUPLICITA] {title_text}")
     else:
@@ -260,18 +304,23 @@ try:
             if not any(kw in title_text.lower() for kw in KEYWORDS):
                 continue
 
-            if job_link not in seen_guids:
+            # Sitemapová URL je už sama o sobě kanonická a stabilní, ale
+            # pro jednotnost s ostatními zdroji ji stále protáhneme
+            # stable_guid() (sjednotí velikost písmen a koncové lomítko).
+            guid = stable_guid("zememeric", job_link)
+
+            if guid not in seen_guids:
                 fe = fg.add_entry()
                 fe.title(f"Zeměměřič: {title_text}")
                 fe.link(href=job_link)
                 fe.description(f"Nabídka z burzy práce Zeměměřič: {title_text}")
                 # BUG FIX: permalink= instead of isPermalink=
-                fe.guid(job_link, permalink=True)
+                fe.guid(guid, permalink=False)
                 fe.pubDate(datetime.now(timezone.utc))
 
-                seen_guids.add(job_link)
+                seen_guids.add(guid)
                 new_count += 1
-                print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_link})")
+                print(f"  + [PŘIDÁNO] {title_text} (GUID: {guid})")
             else:
                 print(f"  - [SKOČENO - DUPLICITA] {title_text}")
     else:
@@ -306,19 +355,20 @@ try:
                 continue
             found_any = True
             job_link = strip_query(job_link)
+            guid = stable_guid("gisportal", job_link)
 
-            if job_link not in seen_guids:
+            if guid not in seen_guids:
                 fe = fg.add_entry()
                 fe.title(f"GISportál: {title_text}")
                 fe.link(href=job_link)
                 fe.description(f"Pracovní nabídka z GISportálu: {title_text}")
                 # BUG FIX: permalink= instead of isPermalink=
-                fe.guid(job_link, permalink=True)
+                fe.guid(guid, permalink=False)
                 fe.pubDate(datetime.now(timezone.utc))
 
-                seen_guids.add(job_link)
+                seen_guids.add(guid)
                 new_count += 1
-                print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_link})")
+                print(f"  + [PŘIDÁNO] {title_text} (GUID: {guid})")
             else:
                 print(f"  - [SKOČENO - DUPLICITA] {title_text}")
 
