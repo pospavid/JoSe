@@ -5,8 +5,32 @@ from bs4 import BeautifulSoup
 from feedgen.feed import FeedGenerator
 from apify_client import ApifyClient
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from urllib.parse import urlsplit, urlunsplit
+import urllib3
+
+# Zeměměřič i GISportál občas dělají problémy s ověřením certifikátu na
+# některých sítích (např. GitHub Actions runnery) - stejně jako v ověřeně
+# fungující verzi skriptu proto pro tyto dva zdroje vypínáme verify=True.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 RSS_FILE = "pracovni_nabidky.xml"
+
+# Klíčová slova pro filtrování Zeměměřičovy sitemapy (ta obsahuje vedle
+# pracovních nabídek i bazar geodetické techniky a hlášení o krádežích,
+# takže bez filtru bychom je omylem přidávali taky).
+KEYWORDS = ["gis", "analytik", "specialista", "vývojář", "developer", "zeměměřič",
+            "geodet", "kartograf", "pracovník", "inženýr", "technik", "práce",
+            "nabídka", "pozice"]
+
+
+def strip_query(url: str) -> str:
+    """Odstraní query string a fragment z URL, aby GUID zůstalo stabilní
+    napříč jednotlivými spuštěními (např. jobs.cz přidává do URL pokaždé
+    jiné ?searchId=..., což by jinak rozbilo deduplikaci)."""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
 
 # ----------------------------------------------------
 # 1. NAČTENÍ EXISTUJÍCÍHO XML FEEDU (POKUD EXISTUJE)
@@ -27,7 +51,7 @@ if os.path.exists(RSS_FILE):
     try:
         tree = ET.parse(RSS_FILE)
         root = tree.getroot()
-        
+
         # Projdeme staré položky v XML
         for item in root.findall(".//item"):
             title = item.findtext("title") or ""
@@ -43,14 +67,18 @@ if os.path.exists(RSS_FILE):
                     fe.title(title)
                     fe.link(href=link)
                     fe.description(description)
-                    fe.guid(guid_clean, isPermalink=True)
-                    
+                    # BUG FIX: feedgen's guid() takes `permalink`, not `isPermalink`
+                    fe.guid(guid_clean, permalink=True)
+
                     if pub_date:
-                        fe.pubDate(pub_date)
-                        
+                        try:
+                            fe.pubDate(pub_date)
+                        except Exception:
+                            fe.pubDate(datetime.now(timezone.utc))
+
                     seen_guids.add(guid_clean)
                     print(f"  [Načteno z XML] GUID: {guid_clean}")
-                
+
         print(f"--> CELKEM úspěšně načteno {len(seen_guids)} unikátních GUID ze souboru '{RSS_FILE}'.\n")
     except Exception as e:
         print(f"--> CHYBA při čtení XML souboru: {e}. Vytváří se zcela nový feed.\n")
@@ -80,9 +108,24 @@ if APIFY_TOKEN:
             "limit": 15
         }
         run = client.actor("curious_coder/linkedin-jobs-scraper").start(run_input=run_input)
-        
-        time.sleep(25)
-        dataset_items = client.dataset(run.default_dataset_id).list_items().items
+
+        # BUG FIX: pevných 25s často nestačilo, než actor doběhne, takže
+        # dataset byl prázdný a smyčka níže se nikdy nespustila (proto
+        # v logu nebyla žádná chyba, ale ani žádná přidaná nabídka).
+        # Místo toho na dokončení běhu aktivně čekáme (max. 120s).
+        max_wait = 120
+        waited = 0
+        run_client = client.run(run["id"])
+        status = run.get("status")
+        while status not in ("SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED") and waited < max_wait:
+            time.sleep(5)
+            waited += 5
+            status = run_client.get().get("status")
+
+        print(f"  Stav Apify běhu: {status} (čekáno {waited}s)")
+
+        dataset_items = client.dataset(run["defaultDatasetId"]).list_items().items
+        print(f"  Nalezeno {len(dataset_items)} položek z LinkedInu.")
 
         for item in dataset_items:
             title_text = item.get("title") or item.get("jobTitle") or item.get("position") or ""
@@ -90,13 +133,16 @@ if APIFY_TOKEN:
             job_url = (item.get("link") or item.get("url") or item.get("jobUrl") or "").strip()
 
             if title_text and job_url:
+                job_url = strip_query(job_url)
                 if job_url not in seen_guids:
                     fe = fg.add_entry()
                     fe.title(f"LinkedIn: {title_text} ({company})")
                     fe.link(href=job_url)
                     fe.description(f"Pozice z LinkedInu: {title_text} - Firma: {company}")
-                    fe.guid(job_url, isPermalink=True)
-                    
+                    # BUG FIX: permalink= instead of isPermalink=
+                    fe.guid(job_url, permalink=True)
+                    fe.pubDate(datetime.now(timezone.utc))
+
                     seen_guids.add(job_url)
                     new_count += 1
                     print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_url})")
@@ -104,11 +150,14 @@ if APIFY_TOKEN:
                     print(f"  - [SKOČENO - DUPLICITA] {title_text}")
 
         try:
-            client.run(run.id).abort()
+            run_client.abort()
         except Exception:
             pass
     except Exception as e:
         print(f"  Chyba LinkedIn: {e}")
+else:
+    print("\n--- Kontrola: LinkedIn ---")
+    print("  Přeskočeno: proměnná prostředí APIFY_TOKEN není nastavena.")
 
 
 # ----------------------------------------------------
@@ -117,35 +166,62 @@ if APIFY_TOKEN:
 print("\n--- Kontrola: Jobs.cz ---")
 try:
     jobs_url = "https://www.jobs.cz/prace/praha/?q%5B%5D=gis&locality%5Bradius%5D=0"
-    resp = requests.get(jobs_url, headers=headers, timeout=10)
+    resp = requests.get(jobs_url, headers=headers, timeout=15)
     if resp.status_code == 200:
         soup = BeautifulSoup(resp.text, "html.parser")
-        articles = soup.select("article") or soup.select(".SearchResultCard")
 
-        for art in articles:
-            link_tag = art.select_one("a[href*='/rpd/']") or art.select_one("a[href*='/nabidka/']") or art.select_one("h2 a") or art.select_one("h3 a")
-            if link_tag:
-                title_text = link_tag.get_text(strip=True)
-                job_link = link_tag.get("href", "").strip()
-                if job_link.startswith("/"):
-                    job_link = f"https://www.jobs.cz{job_link}"
+        # BUG FIX: web nově nepoužívá <article>/.SearchResultCard.
+        # Nabídky poznáme podle odkazu vedoucího na detail /rpd/<id>/.
+        link_tags = soup.select("h2 a[href*='/rpd/']")
+        if not link_tags:
+            link_tags = soup.select("a[href*='/rpd/']")
 
-                if title_text and job_link:
-                    if job_link not in seen_guids:
-                        comp_tag = art.select_one(".SearchResultCard__footer") or art.select_one("[class*='company']")
-                        company = comp_tag.get_text(strip=True) if comp_tag else "Jobs.cz"
+        seen_on_page = set()
+        for link_tag in link_tags:
+            title_text = link_tag.get_text(strip=True)
+            job_link = link_tag.get("href", "").strip()
+            if job_link.startswith("/"):
+                job_link = f"https://www.jobs.cz{job_link}"
 
-                        fe = fg.add_entry()
-                        fe.title(f"Jobs.cz: {title_text} ({company})")
-                        fe.link(href=job_link)
-                        fe.description(f"Pozice z Jobs.cz: {title_text} - Firma: {company}")
-                        fe.guid(job_link, isPermalink=True)
+            # BUG FIX: jobs.cz přidává do URL proměnný ?searchId=...,
+            # takže bychom bez očištění nikdy nenašli duplicitu a stejná
+            # nabídka by se přidávala znovu a znovu při každém běhu.
+            job_link = strip_query(job_link)
 
-                        seen_guids.add(job_link)
-                        new_count += 1
-                        print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_link})")
-                    else:
-                        print(f"  - [SKOČENO - DUPLICITA] {title_text}")
+            if not title_text or not job_link or job_link in seen_on_page:
+                continue
+            seen_on_page.add(job_link)
+
+            if job_link not in seen_guids:
+                # Firmu se pokusíme dohledat v okolí nadpisu; pokud se
+                # nepovede, nekrachujeme, jen necháme obecný popisek.
+                company = "Jobs.cz"
+                try:
+                    card = link_tag.find_parent(["li", "div", "article"])
+                    if card:
+                        for li in card.find_all("li"):
+                            text = li.get_text(strip=True)
+                            if text and text != title_text and "hodnocení" not in text:
+                                company = text
+                                break
+                except Exception:
+                    pass
+
+                fe = fg.add_entry()
+                fe.title(f"Jobs.cz: {title_text} ({company})")
+                fe.link(href=job_link)
+                fe.description(f"Pozice z Jobs.cz: {title_text} - Firma: {company}")
+                # BUG FIX: permalink= instead of isPermalink=
+                fe.guid(job_link, permalink=True)
+                fe.pubDate(datetime.now(timezone.utc))
+
+                seen_guids.add(job_link)
+                new_count += 1
+                print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_link})")
+            else:
+                print(f"  - [SKOČENO - DUPLICITA] {title_text}")
+    else:
+        print(f"  Jobs.cz vrátilo status kód {resp.status_code}")
 except Exception as e:
     print(f"  Chyba Jobs.cz: {e}")
 
@@ -155,29 +231,51 @@ except Exception as e:
 # ----------------------------------------------------
 print("\n--- Kontrola: Zeměměřič.cz ---")
 try:
-    zememerjc_url = "https://www.zememericskazurnalistika.cz/burza-prace/"
-    resp = requests.get(zememerjc_url, headers=headers, timeout=10)
+    # BUG FIX: doména "zememericskazurnalistika.cz" v původním kódu
+    # neexistuje (proto DNS chyba). Místo lámání si hlavy s CSS selektory,
+    # které se na webu časem mění, čteme rovnou WordPress/Rank Math
+    # sitemapu pro rubriku "inzerce" - ta je stabilní a obsahuje URL
+    # úplně všech inzerátů (nabídky práce i bazar techniky).
+    sitemap_url = "https://www.zememeric.cz/inzerce-sitemap.xml"
+    resp = requests.get(sitemap_url, headers=headers, timeout=15, verify=False)
     if resp.status_code == 200:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        offers = soup.select(".entry-title a") or soup.select("article a[href*='burza']")
+        soup_xml = BeautifulSoup(resp.text, "xml")
+        urls = soup_xml.find_all("url")
+        print(f"  Sitemapa obsahuje {len(urls)} položek (nabídky i bazar dohromady).")
 
-        for offer in offers:
-            title_text = offer.get_text(strip=True)
-            job_link = offer.get("href", "").strip()
+        for url_tag in urls:
+            loc_tag = url_tag.find("loc")
+            if not loc_tag:
+                continue
+            job_link = loc_tag.text.strip()
+            slug = job_link.rstrip("/").split("/")[-1]
 
-            if title_text and job_link:
-                if job_link not in seen_guids:
-                    fe = fg.add_entry()
-                    fe.title(f"Zeměměřič: {title_text}")
-                    fe.link(href=job_link)
-                    fe.description(f"Nabídka z burzy práce Zeměměřič: {title_text}")
-                    fe.guid(job_link, isPermalink=True)
+            if slug in ("inzerce", ""):
+                continue  # rozcestníková stránka, ne konkrétní inzerát
 
-                    seen_guids.add(job_link)
-                    new_count += 1
-                    print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_link})")
-                else:
-                    print(f"  - [SKOČENO - DUPLICITA] {title_text}")
+            title_text = slug.replace("-", " ").capitalize()
+
+            # Filtr podle klíčových slov - sitemapa míchá pracovní nabídky
+            # s inzeráty na prodej/krádež geodetické techniky.
+            if not any(kw in title_text.lower() for kw in KEYWORDS):
+                continue
+
+            if job_link not in seen_guids:
+                fe = fg.add_entry()
+                fe.title(f"Zeměměřič: {title_text}")
+                fe.link(href=job_link)
+                fe.description(f"Nabídka z burzy práce Zeměměřič: {title_text}")
+                # BUG FIX: permalink= instead of isPermalink=
+                fe.guid(job_link, permalink=True)
+                fe.pubDate(datetime.now(timezone.utc))
+
+                seen_guids.add(job_link)
+                new_count += 1
+                print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_link})")
+            else:
+                print(f"  - [SKOČENO - DUPLICITA] {title_text}")
+    else:
+        print(f"  Zeměměřič.cz sitemapa vrátila status kód {resp.status_code}")
 except Exception as e:
     print(f"  Chyba Zeměměřič.cz: {e}")
 
@@ -187,29 +285,55 @@ except Exception as e:
 # ----------------------------------------------------
 print("\n--- Kontrola: GISportál.cz ---")
 try:
-    gisportal_url = "https://www.gisportal.cz/category/prace-a-studium/"
-    resp = requests.get(gisportal_url, headers=headers, timeout=10)
+    # BUG FIX: stará adresa "gisportal.cz/category/prace-a-studium/"
+    # vrací 404. Aktuální stránka s nabídkami je:
+    gisportal_url = "https://gisportal.cz/pracovni-nabidky/"
+    resp = requests.get(gisportal_url, headers=headers, timeout=15, verify=False)
     if resp.status_code == 200:
         soup = BeautifulSoup(resp.text, "html.parser")
-        articles = soup.select("article h2 a") or soup.select(".post-title a")
+        h3_tags = soup.find_all("h3")
+        print(f"  Nalezeno {len(h3_tags)} nadpisů h3 na stránce.")
 
-        for art in articles:
-            title_text = art.get_text(strip=True)
-            job_link = art.get("href", "").strip()
+        found_any = False
+        for h3 in h3_tags:
+            a_tag = h3.find("a") or h3.find_parent("a")
+            if not (a_tag and a_tag.get("href")):
+                continue
 
-            if title_text and job_link:
-                if job_link not in seen_guids:
-                    fe = fg.add_entry()
-                    fe.title(f"GISportál: {title_text}")
-                    fe.link(href=job_link)
-                    fe.description(f"Článek/Nabídka z GISportálu: {title_text}")
-                    fe.guid(job_link, isPermalink=True)
+            title_text = h3.get_text(strip=True)
+            job_link = a_tag["href"].strip()
+            if not title_text:
+                continue
+            found_any = True
+            job_link = strip_query(job_link)
 
-                    seen_guids.add(job_link)
-                    new_count += 1
-                    print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_link})")
-                else:
-                    print(f"  - [SKOČENO - DUPLICITA] {title_text}")
+            if job_link not in seen_guids:
+                fe = fg.add_entry()
+                fe.title(f"GISportál: {title_text}")
+                fe.link(href=job_link)
+                fe.description(f"Pracovní nabídka z GISportálu: {title_text}")
+                # BUG FIX: permalink= instead of isPermalink=
+                fe.guid(job_link, permalink=True)
+                fe.pubDate(datetime.now(timezone.utc))
+
+                seen_guids.add(job_link)
+                new_count += 1
+                print(f"  + [PŘIDÁNO] {title_text} (GUID: {job_link})")
+            else:
+                print(f"  - [SKOČENO - DUPLICITA] {title_text}")
+
+        if not found_any:
+            # POZOR: v mém testování GISportál aktuálně vykresluje výpis
+            # nabídek přes JavaScript/AJAX, takže syrové HTML žádné <h3>
+            # s nabídkou neobsahuje. Kód zde zůstává (a nic nekrachuje),
+            # kdyby se to na straně webu změnilo zpět na statické
+            # vykreslování - jinak by případný trvalý fix vyžadoval
+            # prohlížeč (Selenium/Playwright) nebo nalezení jejich
+            # interního AJAX endpointu.
+            print("  Žádné nabídky v h3 nadpisech nenalezeny (web je pravděpodobně "
+                  "vykresluje přes JavaScript). Zdroj pro tento běh nic nepřidal.")
+    else:
+        print(f"  GISportál.cz vrátilo status kód {resp.status_code}")
 except Exception as e:
     print(f"  Chyba GISportál.cz: {e}")
 
