@@ -340,7 +340,7 @@ try:
     resp = requests.get(gisportal_url, headers=headers, timeout=15, verify=False)
     if resp.status_code == 200:
         soup = BeautifulSoup(resp.text, "html.parser")
-        h3_tags = soup.find_all("a")
+        h3_tags = soup.find_all("h3")
         print(f"  Nalezeno {len(h3_tags)} nadpisů h3 na stránce.")
 
         found_any = False
