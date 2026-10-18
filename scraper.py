@@ -205,7 +205,7 @@ else:
 # ----------------------------------------------------
 print("\n--- Kontrola: Jobs.cz ---")
 try:
-    jobs_url = "https://www.jobs.cz/prace/praha/?q%5B%5D=gis&locality%5Bradius%5D=0"
+    jobs_url = "https://www.jobs.cz/prace/brno/?q%5B%5D=gis&locality%5Bradius%5D=30"
     resp = requests.get(jobs_url, headers=headers, timeout=15)
     if resp.status_code == 200:
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -331,7 +331,7 @@ except Exception as e:
 
 # ----------------------------------------------------
 # 5. GISPORTÁL.CZ
-# ----------------------------------------------------
+# ----------------------------------------------------  
 print("\n--- Kontrola: GISportál.cz ---")
 try:
     # BUG FIX: stará adresa "gisportal.cz/category/prace-a-studium/"
@@ -340,10 +340,26 @@ try:
     resp = requests.get(gisportal_url, headers=headers, timeout=15, verify=False)
     if resp.status_code == 200:
         soup = BeautifulSoup(resp.text, "html.parser")
-        h3_tags = soup.find_all("h3")
+        h3_tags = soup.find_all("a")
         print(f"  Nalezeno {len(h3_tags)} nadpisů h3 na stránce.")
 
         found_any = False
+        for a_tag in soup.select('a[href*="/job/"]'):
+            job_link = a_tag['href'].strip()
+            h3_tag = a_tag.find('h3')
+    
+            if not h3_tag:
+                continue
+        
+            title_text = h3_tag.get_text(strip=True)
+            if not title_text:
+                continue
+    
+            found_any = True
+            job_link = strip_query(job_link)
+            guid = stable_guid("gisportal", job_link)
+
+        """        
         for h3 in h3_tags:
             a_tag = h3.find("a") or h3.find_parent("a")
             if not (a_tag and a_tag.get("href")):
@@ -356,6 +372,7 @@ try:
             found_any = True
             job_link = strip_query(job_link)
             guid = stable_guid("gisportal", job_link)
+            """
 
             if guid not in seen_guids:
                 fe = fg.add_entry()
