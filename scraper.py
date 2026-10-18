@@ -358,22 +358,7 @@ try:
             found_any = True
             job_link = strip_query(job_link)
             guid = stable_guid("gisportal", job_link)
-
-        """        
-        for h3 in h3_tags:
-            a_tag = h3.find("a") or h3.find_parent("a")
-            if not (a_tag and a_tag.get("href")):
-                continue
-
-            title_text = h3.get_text(strip=True)
-            job_link = a_tag["href"].strip()
-            if not title_text:
-                continue
-            found_any = True
-            job_link = strip_query(job_link)
-            guid = stable_guid("gisportal", job_link)
-            """
-
+                    
             if guid not in seen_guids:
                 fe = fg.add_entry()
                 fe.title(f"GISportál: {title_text}")
